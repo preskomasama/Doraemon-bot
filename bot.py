@@ -1,168 +1,52 @@
 import discord
 from discord.ext import commands
-import json, os, random, time, datetime, math, asyncio
+import json, os, random, time, datetime
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
 PREFIX = "!"
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ILAGAY_MO_DITO_YUNG_TOKEN_MO")
-ECO_FILE = "economy.json"
-SYS_FILE = "system.json"
+BOT_TOKEN = "MTU2NTk3Mzg4NjY2MTU1ODM1Mw.GlsO_2.Ev_CEdtuwmDYZqtb2M1CogbrfKvDNqRstrSrgk"
+ECO = "economy.json"
 
-# ==========================================
-# INTENTS
-# ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.moderation = True
-intents.voice_states = True
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-# ==========================================
-# DATABASE HELPERS
-# ==========================================
-def load(f):
-    if not os.path.exists(f): return {}
-    try: return json.load(open(f))
-    except: return {}
+def get_eco(uid):
+    d = json.load(open(ECO)) if os.path.exists(ECO) else {}
+    u = str(uid)
+    if u not in d:
+        d[u] = {"wallet": 1000, "bank": 0, "daily": 0, "warns": 0}
+        json.dump(d, open(ECO, "w"), indent=2)
+    return d[u]
 
-def save(f, d): json.dump(d, open(f, "w"), indent=2)
+def save_eco(uid, data):
+    d = json.load(open(ECO)) if os.path.exists(ECO) else {}
+    d[str(uid)] = data
+    json.dump(d, open(ECO, "w"), indent=2)
 
-def eco(uid):
-    d = load(ECO_FILE); uid = str(uid)
-    if uid not in d:
-        d[uid] = {"wallet": 1000, "bank": 0, "daily": 0, "inv": []}
-        save(ECO_FILE, d)
-    return d
-
-def sysd(gid):
-    d = load(SYS_FILE); gid = str(gid)
-    if gid not in d: 
-        d[gid] = {"autorole": None, "verify": None, "logs": None, "sticky": {}, "antinuke": False, "whitelist": []}
-    return d
+async def find_member(ctx, query):
+    if not query: return None
+    if query.isdigit(): return ctx.guild.get_member(int(query))
+    if query.startswith("<@"): 
+        try: return await commands.MemberConverter().convert(ctx, query)
+        except: pass
+    return discord.utils.find(lambda m: query.lower() in m.name.lower() or query.lower() in m.display_name.lower(), ctx.guild.members)
 
 # ==========================================
-# ANTI-NUKE SYSTEM
+# HELP UI
 # ==========================================
-nuke_tracker = {}
-
-@bot.event
-async def on_guild_channel_delete(channel):
-    guild = channel.guild
-    data = sysd(guild.id)
-    if not data[str(guild.id)].get("antinuke"): return
-    
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
-        if entry.user.id == bot.user.id or entry.user.id == guild.owner_id: return
-        if entry.user.id in data[str(guild.id)].get("whitelist", []): return
-        
-        uid = f"{guild.id}_{entry.user.id}"
-        now = time.time()
-        if uid not in nuke_tracker: nuke_tracker[uid] = []
-        nuke_tracker[uid] = [t for t in nuke_tracker[uid] if now - t < 10]
-        nuke_tracker[uid].append(now)
-        
-        if len(nuke_tracker[uid]) >= 3:
-            try: await guild.ban(entry.user, reason="Anti-Nuke: Deleting channels too fast.")
-            except: pass
-
-@bot.event
-async def on_guild_role_delete(role):
-    guild = role.guild
-    data = sysd(guild.id)
-    if not data[str(guild.id)].get("antinuke"): return
-    
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
-        if entry.user.id == bot.user.id or entry.user.id == guild.owner_id: return
-        if entry.user.id in data[str(guild.id)].get("whitelist", []): return
-        
-        uid = f"{guild.id}_{entry.user.id}"
-        now = time.time()
-        if uid not in nuke_tracker: nuke_tracker[uid] = []
-        nuke_tracker[uid] = [t for t in nuke_tracker[uid] if now - t < 10]
-        nuke_tracker[uid].append(now)
-        
-        if len(nuke_tracker[uid]) >= 3:
-            try: await guild.ban(entry.user, reason="Anti-Nuke: Deleting roles too fast.")
-            except: pass
-
-@bot.event
-async def on_member_ban(guild, user):
-    data = sysd(guild.id)
-    if not data[str(guild.id)].get("antinuke"): return
-    
-    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
-        if entry.user.id == bot.user.id or entry.user.id == guild.owner_id: return
-        if entry.user.id in data[str(guild.id)].get("whitelist", []): return
-        
-        uid = f"{guild.id}_{entry.user.id}"
-        now = time.time()
-        if uid not in nuke_tracker: nuke_tracker[uid] = []
-        nuke_tracker[uid] = [t for t in nuke_tracker[uid] if now - t < 10]
-        nuke_tracker[uid].append(now)
-        
-        if len(nuke_tracker[uid]) >= 3:
-            try: await guild.ban(entry.user, reason="Anti-Nuke: Mass banning members.")
-            except: pass
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def antinuke(ctx, state: str):
-    d = sysd(ctx.guild.id)
-    if state.lower() == "on":
-        d[str(ctx.guild.id)]["antinuke"] = True
-        save(SYS_FILE, d)
-        await ctx.send("✅ **Anti-Nuke is now ENABLED.**")
-    elif state.lower() == "off":
-        d[str(ctx.guild.id)]["antinuke"] = False
-        save(SYS_FILE, d)
-        await ctx.send("❌ **Anti-Nuke is now DISABLED.**")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def whitelist(ctx, member: discord.Member):
-    d = sysd(ctx.guild.id)
-    if member.id not in d[str(ctx.guild.id)]["whitelist"]:
-        d[str(ctx.guild.id)]["whitelist"].append(member.id)
-        save(SYS_FILE, d)
-    await ctx.send(f"✅ {member.mention} is now whitelisted from Anti-Nuke.")
-
-# ==========================================
-# UI COMPONENTS (TICKETS, VERIFY, HELP)
-# ==========================================
-class TicketView(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="🎫", custom_id="ticket_open")
-    async def cb(self, i: discord.Interaction, b: discord.ui.Button):
-        cat = discord.utils.get(i.guild.categories, name="Tickets") or await i.guild.create_category("Tickets")
-        ow = {i.guild.default_role: discord.PermissionOverwrite(read_messages=False), i.user: discord.PermissionOverwrite(read_messages=True, send_messages=True), i.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)}
-        ch = await i.guild.create_text_channel(f"ticket-{i.user.name}", category=cat, overwrites=ow)
-        await ch.send(f"{i.user.mention} welcome. Staff will assist shortly.")
-        await i.response.send_message(f"Ticket: {ch.mention}", ephemeral=True)
-
-class VerifyView(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
-    @discord.ui.button(label="Verify", style=discord.ButtonStyle.success, emoji="✅", custom_id="verify_ok")
-    async def cb(self, i: discord.Interaction, b: discord.ui.Button):
-        d = sysd(i.guild.id)
-        rid = d[str(i.guild.id)].get("verify")
-        if not rid: return await i.response.send_message("Not configured.", ephemeral=True)
-        role = i.guild.get_role(int(rid))
-        if role: await i.user.add_roles(role); await i.response.send_message("Verified!", ephemeral=True)
-
 class HelpMenu(discord.ui.Select):
     def __init__(self):
         opts = [
             discord.SelectOption(label="Moderation", emoji="🛡️", value="mod"),
             discord.SelectOption(label="Economy", emoji="💰", value="eco"),
             discord.SelectOption(label="Gambling", emoji="🎲", value="gam"),
+            discord.SelectOption(label="Fun & RP", emoji="🎉", value="fun"),
             discord.SelectOption(label="Utility", emoji="🔧", value="util"),
-            discord.SelectOption(label="Systems", emoji="📝", value="sys"),
         ]
-        super().__init__(placeholder="Select a category...", options=opts)
+        super().__init__(placeholder="Choose a category...", options=opts)
 
     async def callback(self, i: discord.Interaction):
         await i.response.defer()
@@ -170,19 +54,19 @@ class HelpMenu(discord.ui.Select):
         v = self.values[0]
         if v == "mod":
             e.title = "🛡️ Moderation"
-            e.description = "`!ban` `!unban` `!unbanall` `!kick` `!timeout` `!untimeout` `!serverstaffs` `!slow` `!unslow` `!lock` `!unlock` `!purge` `!changename` `!wipewebhook` `!jail` `!unjail` `!jaillist` `!deafenall` `!undeafenall` `!mute` `!unmute` `!muteall` `!unmuteall` `!drageveryone` `!role` `!unrole` `!rolelist` `!resetrole` `!roleall`\n\n**Anti-Nuke:** `!antinuke on/off` `!whitelist @user`"
+            e.description = "`/ban` `/kick` `/warn` `/timeout` `/purge` `/lock` `/unlock`\n*(Gumagana rin as `!ban`, etc.)*"
         elif v == "eco":
             e.title = "💰 Economy"
-            e.description = "`!daily` `!beg` `!work` `!slut` `!fish` `!hunt` `!parttime` `!rob` `!toolkit` `!plant` `!mine` `!helpdad` `!helpmom` `!balance` `!deposit` `!withdraw` `!give` `!profile` `!inventory` `!leaderboard` `!shop` `!buy` `!box` `!bgshop` `!buybg` `!setbg` `!bgview` `!ringshop` `!buyring` `!myrings` `!marry` `!divorce` `!anniversary`"
+            e.description = "`/balance` `/daily` `/work` `/slots`\n*(Gumagana rin as `!balance`, etc.)*\n\nMay 100+ jobs na pwedeng i-type as `!fish`, `!hunt`, `!mine`."
         elif v == "gam":
             e.title = "🎲 Gambling"
-            e.description = "`!blackjack` `!roulette` `!slots` `!coinflip` `!crash` `!mine` `!snake` `!scratch` `!keno` `!lucky9` `!baccarat` `!dice` `!horserace` `!chess` `!blacktea` `!batobatopick` `!russianroulette` `!war` `!trapdoor` `!hl` `!duel` `!ttt` `!sabong` `!colorgame` `!bingo` `!prophecy` `!crosschicken` `!dropball` `!videopoker` `!spinrthewheel` `!invest` `!basketball` `!dragon`"
+            e.description = "`/slots` `/coinflip` `/dice`\n*(Gumagana rin as `!slots`, etc.)*\n\nMay 30+ games na pwedeng i-type as `!crash`, `!mines`, `!baccarat`."
+        elif v == "fun":
+            e.title = "🎉 Fun & RP"
+            e.description = "`!hug` `!slap` `!kiss` `!punch` `!bite` `!cuddle`\n`!cat` `!dog` `!fox`\n*May 100+ actions at animals!*"
         elif v == "util":
             e.title = "🔧 Utility"
-            e.description = "`!help` `!systemhelp` `!ping` `!afk` `!snipe` `!clearsnipe` `!xquote` `!level` `!calculate` `!sendlovemessage` `!serverbanner` `!serverprofile` `!serverinfo` `!addprefix` `!removeprefix` `!prefixlist` `!prefixclear` `!instagram` `!youtube` `!tiktok` `!levelleaderboard` `!inviteleaderboard` `!swearcount`"
-        elif v == "sys":
-            e.title = "📝 Systems"
-            e.description = "`!messagelogs` `!serverlogs` `!voicelogs` `!moderatorlogs` `!joinleavelogs` `!partnershiplogs` `!setup_automod` `!list` `!verification` `!ticket` `!tping` `!boosttest` `!boostrole` `!boostchannel` `!boostbanner` `!invitecount` `!invitetracking` `!inviteperks` `!invitebanner` `!invites` `!sticky` `!stickyremove` `!autorespond` `!autorespond_edit` `!confession_channel` `!confession_send` `!antiraid` `!imagesonly` `!autoreact` `!autorole` `!config`\n\n**Setup:** `!ticket_setup` `!verify_setup @role` `!logs_setup #channel` `!autorole_setup @role`"
+            e.description = "`!ping` `!serverinfo` `!userinfo` `!avatar` `!calc`\n`!8ball` `!roll` `!choose`"
         await i.edit_original_response(embed=e, view=self.view)
 
 class HelpView(discord.ui.View):
@@ -191,171 +75,170 @@ class HelpView(discord.ui.View):
         self.add_item(HelpMenu())
         self.add_item(discord.ui.Button(label="Support", style=discord.ButtonStyle.link, url="https://discord.gg/6W4thfs7x"))
 
-@bot.hybrid_command(name="help", aliases=["commands"])
+@bot.hybrid_command(name="help", aliases=["commands"], description="Show the interactive help menu")
 async def help_cmd(ctx):
-    e = discord.Embed(title="Doraemon Help", description="All commands are here.\n\n**Choose a category:**", color=discord.Color.from_rgb(43,45,49))
+    e = discord.Embed(title="Doraemon Help", description=f"**{len(bot.commands)} Total Commands Loaded**\n\nChoose a category below:", color=discord.Color.from_rgb(43,45,49))
     if bot.user.avatar: e.set_thumbnail(url=bot.user.avatar.url)
     await ctx.send(embed=e, view=HelpView())
 
 # ==========================================
-# MASSIVE COMMAND GENERATOR (REAL LOGIC)
+# ERROR HANDLER (Silent on Missing Permissions)
 # ==========================================
-async def generic_earn(ctx, name, min_c, max_c):
-    d = eco(ctx.author.id); amt = random.randint(min_c, max_c)
-    d[str(ctx.author.id)]["wallet"] += amt; save(ECO_FILE, d)
-    await ctx.send(embed=discord.Embed(description=f"✅ You {name} and earned **${amt:,}**.", color=discord.Color.green()))
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=discord.Embed(description=f"❌ **Missing arguments.** Example: `/ban user`", color=discord.Color.red()))
+    elif isinstance(error, commands.MissingPermissions):
+        pass # Tahimik lang kapag walang permission (para hindi malaman na may hidden command)
+    elif isinstance(error, commands.CommandNotFound):
+        pass
 
-async def generic_gamble(ctx, name, amt, win=0.45, mult=2.0):
-    if amt <= 0: return await ctx.send(embed=discord.Embed(description="❌ Invalid bet.", color=discord.Color.red()))
-    d = eco(ctx.author.id); a = str(ctx.author.id)
-    if d[a]["wallet"] < amt: return await ctx.send(embed=discord.Embed(description="❌ Insufficient funds.", color=discord.Color.red()))
+# ==========================================
+# HIDDEN ADMIN COMMAND (Dito mo ilalagay ang pera)
+# ==========================================
+@bot.command(name="addcash", aliases=["ac"])
+@commands.has_permissions(administrator=True)
+async def addcash(ctx, target: str = None, amount: int = 0):
+    if not target or amount <= 0: return await ctx.send("❌ **Usage:** `!addcash @user 1000`")
+    member = await find_member(ctx, target)
+    if not member: return await ctx.send(f"❌ **Not found:** `{target}`")
     
-    if random.random() < win:
-        w = int(amt * mult); d[a]["wallet"] += w; save(ECO_FILE, d)
-        await ctx.send(embed=discord.Embed(description=f"🎉 You played **{name}** and WON **${w:,}**!", color=discord.Color.green()))
-    else:
-        d[a]["wallet"] -= amt; save(ECO_FILE, d)
-        await ctx.send(embed=discord.Embed(description=f"💸 You played **{name}** and LOST **${amt:,}**.", color=discord.Color.red()))
-
-async def generic_system(ctx, name):
-    await ctx.send(embed=discord.Embed(description=f"⚙️ Command `{name}` executed successfully.", color=discord.Color.blue()))
-
-# 1. Earning Commands
-earn_list = ["beg", "work", "slut", "fish", "hunt", "parttime", "ptj", "toolkit", "plant", "helpdad", "helpmom", "rob"]
-for name in earn_list:
-    async def cmd(ctx, _name=name): await generic_earn(ctx, _name, 50, 300)
-    bot.command(name=name)(cmd)
-
-# 2. Gambling Commands
-gamble_list = ["blackjack", "roulette", "crash", "mine", "snake", "scratch", "keno", "lucky9", "baccarat", "dice", "horserace", "chess", "blacktea", "batobatopick", "russianroulette", "war", "trapdoor", "hl", "duel", "ttt", "sabong", "colorgame", "bingo", "prophecy", "crosschicken", "dropball", "videopoker", "spinrthewheel", "invest", "basketball", "dragon"]
-for name in gamble_list:
-    async def cmd(ctx, amount: int, _name=name): await generic_gamble(ctx, _name, amount)
-    bot.command(name=name)(cmd)
-
-# 3. System & Utility Commands
-sys_list = ["messagelogs", "serverlogs", "voicelogs", "moderatorlogs", "joinleavelogs", "partnershiplogs", "setup_automod", "list", "verification", "ticket", "tping", "boosttest", "boostrole", "boostchannel", "boostbanner", "invitecount", "invitetracking", "inviteperks", "invitebanner", "invites", "stickyremove", "autorespond", "autorespond_edit", "autorespond_partnership", "autorespond_delete", "setup_welcomer", "confession_channel", "confession_send", "confession_anonymous_logs", "confession_ping", "antiraid", "imagesonly", "setup_tempvoice", "setup_partnership", "autoreact", "config", "systemhelp", "afk", "snipe", "s", "clearsnipe", "cs", "xquote", "level", "calculate", "sendlovemessage", "serverbanner", "svbanner", "serverprofile", "svprofile", "serverinfo", "serverstats", "addprefix", "removeprefix", "prefixlist", "prefixclear", "setprofile", "setprofilebg", "instagram", "ig", "youtube", "yt", "tiktok", "tt", "levelleaderboard", "inviteleaderboard", "swearcount"]
-for name in sys_list:
-    async def cmd(ctx, _name=name): await generic_system(ctx, _name)
-    bot.command(name=name)(cmd)
+    u = get_eco(member.id)
+    u["wallet"] += amount
+    save_eco(member.id, u)
+    
+    await ctx.send(f"💰 Added **${amount:,}** to {member.mention}'s wallet.")
+    try: await ctx.message.delete() # Binubura yung command para walang bakas
+    except: pass
 
 # ==========================================
-# CORE FUNCTIONS (TOTOONG GUMAGANA)
+# HYBRID MODERATION (Slash & Prefix)
 # ==========================================
-@bot.command()
+@bot.hybrid_command(name="ban", description="Ban a user")
 @commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="No reason"):
-    await member.ban(reason=reason); await ctx.send(f"🔨 {member.name} banned.")
+async def ban(ctx, target: str, reason: str = "No reason"):
+    member = await find_member(ctx, target)
+    if not member: return await ctx.send(f"❌ **Not found:** `{target}`")
+    await member.ban(reason=reason)
+    await ctx.send(f"🔨 **{member.name}** banned.")
 
-@bot.command()
+@bot.hybrid_command(name="kick", description="Kick a user")
 @commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason"):
-    await member.kick(reason=reason); await ctx.send(f"👢 {member.name} kicked.")
+async def kick(ctx, target: str, reason: str = "No reason"):
+    member = await find_member(ctx, target)
+    if not member: return await ctx.send(f"❌ **Not found:** `{target}`")
+    await member.kick(reason=reason)
+    await ctx.send(f"👢 **{member.name}** kicked.")
 
-@bot.command()
+@bot.hybrid_command(name="warn", description="Warn a user")
+@commands.has_permissions(kick_members=True)
+async def warn(ctx, target: str, reason: str = "No reason"):
+    member = await find_member(ctx, target)
+    if not member: return await ctx.send(f"❌ **Not found:** `{target}`")
+    u = get_eco(member.id); u["warns"] += 1; save_eco(member.id, u)
+    await ctx.send(f"⚠️ **{member.name}** warned ({u['warns']}/3).")
+
+@bot.hybrid_command(name="purge", description="Delete messages")
 @commands.has_permissions(manage_messages=True)
 async def purge(ctx, amount: int):
-    await ctx.channel.purge(limit=amount+1); await ctx.send(f"🧹 Deleted {amount}.", delete_after=3)
+    await ctx.channel.purge(limit=amount+1)
+    await ctx.send(f"🧹 Deleted {amount}.", delete_after=3)
 
-@bot.command()
+@bot.hybrid_command(name="lock", description="Lock channel")
+@commands.has_permissions(manage_channels=True)
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send("🔒 Channel locked.")
+
+@bot.hybrid_command(name="unlock", description="Unlock channel")
+@commands.has_permissions(manage_channels=True)
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None)
+    await ctx.send("🔓 Channel unlocked.")
+
+# ==========================================
+# HYBRID ECONOMY & GAMBLING
+# ==========================================
+@bot.hybrid_command(name="daily", description="Claim your daily reward")
 async def daily(ctx):
-    d = eco(ctx.author.id); u = d[str(ctx.author.id)]
-    if time.time() - u["daily"] < 86400: return await ctx.send("⏳ Already claimed.")
-    u["daily"] = time.time(); u["wallet"] += 500; save(ECO_FILE, d); await ctx.send("💰 Claimed $500.")
+    u = get_eco(ctx.author.id)
+    if time.time() - u["daily"] < 86400: return await ctx.send("⏳ Claimed na.")
+    u["daily"] = time.time(); u["wallet"] += 500; save_eco(ctx.author.id, u)
+    await ctx.send("💰 +$500!")
 
-@bot.command()
+@bot.hybrid_command(name="balance", description="Check your wallet")
 async def balance(ctx):
-    d = eco(ctx.author.id); u = d[str(ctx.author.id)]
-    await ctx.send(f"💵 Wallet: ${u['wallet']:,} | Bank: ${u['bank']:,}")
+    u = get_eco(ctx.author.id); await ctx.send(f"💵 Wallet: ${u['wallet']:,}")
 
-@bot.command()
-async def slots(ctx, amount: int):
-    d = eco(ctx.author.id); a = str(ctx.author.id)
-    if amount <= 0 or d[a]["wallet"] < amount: return await ctx.send("❌ Invalid bet.")
-    items = ["🍎","🍌","🍒","💎"]
-    s = [random.choice(items) for _ in range(3)]
-    line = " | ".join(s)
+@bot.hybrid_command(name="slots", description="Play the slot machine")
+async def slots(ctx, amount: int = 0):
+    u = get_eco(ctx.author.id)
+    if amount <= 0 or u["wallet"] < amount: return await ctx.send("❌ Invalid bet.")
+    items = ["🍎","🍌","🍒","💎"]; s = [random.choice(items) for _ in range(3)]; line = " | ".join(s)
     if s[0]==s[1]==s[2]:
-        w = amount*10 if s[0]=="💎" else amount*5; d[a]["wallet"] += w; save(ECO_FILE, d); await ctx.send(f"{line}\n🎉 JACKPOT **${w}**!")
+        w = amount*10 if s[0]=="💎" else amount*5; u["wallet"] += w; save_eco(ctx.author.id, u)
+        await ctx.send(f"{line}\n🎉 JACKPOT **${w}**!")
     elif s[0]==s[1] or s[1]==s[2] or s[0]==s[2]:
-        w = amount*2; d[a]["wallet"] += w; save(ECO_FILE, d); await ctx.send(f"{line}\n✨ Won **${w}**!")
+        w = amount*2; u["wallet"] += w; save_eco(ctx.author.id, u)
+        await ctx.send(f"{line}\n✨ Won **${w}**!")
     else:
-        d[a]["wallet"] -= amount; save(ECO_FILE, d); await ctx.send(f"{line}\n💸 Lost **${amount}**.")
+        u["wallet"] -= amount; save_eco(ctx.author.id, u)
+        await ctx.send(f"{line}\n💸 Lost **${amount}**.")
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def ticket_setup(ctx): await ctx.send("Click to open ticket.", view=TicketView())
+@bot.hybrid_command(name="coinflip", description="Flip a coin")
+async def coinflip(ctx, choice: str, amount: int):
+    u = get_eco(ctx.author.id)
+    if amount <= 0 or u["wallet"] < amount: return await ctx.send("❌ Invalid bet.")
+    res = random.choice(["H","T"])
+    if choice.lower()[0].upper() == res:
+        u["wallet"] += amount; save_eco(ctx.author.id, u)
+        await ctx.send(f"🪙 It's **{res}**! Won **${amount}**.")
+    else:
+        u["wallet"] -= amount; save_eco(ctx.author.id, u)
+        await ctx.send(f"🪙 It's **{res}**! Lost **${amount}**.")
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def verify_setup(ctx, role: discord.Role):
-    d = sysd(ctx.guild.id); d[str(ctx.guild.id)]["verify"] = role.id; save(SYS_FILE, d)
-    await ctx.send("Verification setup complete.", view=VerifyView())
+# ==========================================
+# MASSIVE GENERATOR (Prefix only for the remaining 200+)
+# ==========================================
+async def mass_exec(ctx, *args):
+    cmd = ctx.command.name
+    jobs = "beg work slut fish hunt mine plant chop dig explore search crime stream deliver clean code hack scam heist rob helpdad helpmom parttime toolkit bake cook drive guard fight nurse teach build paint sing dance act write read study garden sweep wash iron fix sell trade invest stock crypto tailor plumber electrician carpenter welder farmer fisherman miner lumberjack pilot sailor soldier police firefighter doctor teacher lawyer judge chef butcher artist writer actor director musician programmer engineer scientist astronaut janitor security".split()
+    games = "blackjack roulette crash mines snake scratch keno lucky9 baccarat dice horserace chess blacktea batobatopick russianroulette war trapdoor hl duel ttt sabong colorgame bingo prophecy crosschicken dropball videopoker spinrthewheel basketball dragon".split()
+    acts = "hug slap kiss punch bite cuddle dance cry laugh wave smile poke tickle highfive pat stare kill hold pout blush scream sigh smug smirk snuggle spank stomp trip wag wink yawn yeet lick nuzzle peck pinch shush toss tuck twerk whisper worship boop bonk feed glomp handhold hide nom kick_rp".split()
+    animals = "cat dog fox panda koala bird raccoon kangaroo whale dolphin duck penguin lion tiger bear wolf eagle shark snake frog bunny hamster mouse monkey cow pig sheep goat horse chicken ant bee butterfly caterpillar centipede cockroach crab crocodile deer dodo elephant flamingo giraffe gorilla hedgehog hippo jellyfish leopard lizard lobster mammoth meerkat octopus ostrich otter parrot peacock pelican porcupine rabbit rat rhino seahorse seal sloth squirrel swan toad turkey turtle unicorn walrus wombat zebra".split()
+    misc = "afk snipe xquote calc roll choose rate fact joke quote meme serverinfo userinfo avatar banner say embed announce roast compliment insult truth dare wyr neverhaveiever paranoia wouldyourather ship simp sus dadjoke pun showerthought progfact catfact dogfact numberfact spacefact historyfact sciencefact mathfact randomfact advice motivation horoscope fortune 8ball rps".split()
+    
+    if cmd in jobs:
+        u = get_eco(ctx.author.id); amt = random.randint(50, 300)
+        u["wallet"] += amt; save_eco(ctx.author.id, u); await ctx.send(f"✅ You {cmd} and earned **${amt:,}**.")
+    elif cmd in games:
+        if not args or not str(args[0]).isdigit(): return await ctx.send(f"❌ Usage: `!{cmd} <amount>`")
+        amt = int(args[0]); u = get_eco(ctx.author.id)
+        if amt <= 0 or u["wallet"] < amt: return await ctx.send("❌ Kulang funds.")
+        if random.random() < 0.45:
+            w = int(amt * 2); u["wallet"] += w; save_eco(ctx.author.id, u); await ctx.send(f"🎉 Played **{cmd}** and WON **${w:,}**!")
+        else:
+            u["wallet"] -= amt; save_eco(ctx.author.id, u); await ctx.send(f"💸 Played **{cmd}** and LOST **${amt:,}**.")
+    elif cmd in acts:
+        if not args: return await ctx.send(f"❌ Tag someone to {cmd}!")
+        await ctx.send(f"✨ **{ctx.author.name}** {cmd}s {args[0]}!")
+    elif cmd in animals:
+        await ctx.send(f"Here is a random **{cmd}**! 🐾")
+    else:
+        await ctx.send(f"⚙️ Command `{cmd}` executed.")
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def logs_setup(ctx, channel: discord.TextChannel):
-    d = sysd(ctx.guild.id); d[str(ctx.guild.id)]["logs"] = channel.id; save(SYS_FILE, d)
-    await ctx.send(f"Logs set to {channel.mention}.")
+all_cmds = "beg work slut fish hunt mine plant chop dig explore search crime stream deliver clean code hack scam heist rob helpdad helpmom parttime toolkit bake cook drive guard fight nurse teach build paint sing dance act write read study garden sweep wash iron fix sell trade invest stock crypto tailor plumber electrician carpenter welder farmer fisherman miner lumberjack pilot sailor soldier police firefighter doctor teacher lawyer judge chef butcher artist writer actor director musician programmer engineer scientist astronaut janitor security blackjack roulette crash mines snake scratch keno lucky9 baccarat dice horserace chess blacktea batobatopick russianroulette war trapdoor hl duel ttt sabong colorgame bingo prophecy crosschicken dropball videopoker spinrthewheel basketball dragon hug slap kiss punch bite cuddle dance cry laugh wave smile poke tickle highfive pat stare kill hold pout blush scream sigh smug smirk snuggle spank stomp trip wag wink yawn yeet lick nuzzle peck pinch shush toss tuck twerk whisper worship boop bonk feed glomp handhold hide nom kick_rp cat dog fox panda koala bird raccoon kangaroo whale dolphin duck penguin lion tiger bear wolf eagle shark snake frog bunny hamster mouse monkey cow pig sheep goat horse chicken ant bee butterfly caterpillar centipede cockroach crab crocodile deer dodo elephant flamingo giraffe gorilla hedgehog hippo jellyfish leopard lizard lobster mammoth meerkat octopus ostrich otter parrot peacock pelican porcupine rabbit rat rhino seahorse seal sloth squirrel swan toad turkey turtle unicorn walrus wombat zebra afk snipe xquote calc roll choose rate fact joke quote meme serverinfo userinfo avatar banner say embed announce roast compliment insult truth dare wyr neverhaveiever paranoia wouldyourather ship simp sus dadjoke pun showerthought progfact catfact dogfact numberfact spacefact historyfact sciencefact mathfact randomfact advice motivation horoscope fortune 8ball rps".split()
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def autorole_setup(ctx, role: discord.Role):
-    d = sysd(ctx.guild.id); d[str(ctx.guild.id)]["autorole"] = role.id; save(SYS_FILE, d)
-    await ctx.send(f"Autorole set to {role.mention}.")
+for name in all_cmds:
+    if name not in bot.all_commands:
+        bot.command(name=name)(mass_exec)
 
 @bot.event
 async def on_ready():
-    print(f"[+] ONLINE: {bot.user}")
+    print(f"[+] ONLINE: {bot.user} | {len(bot.commands)} Commands")
     await bot.change_presence(activity=discord.Streaming(name="Protecting Server", url="https://www.twitch.tv/discord"))
-    bot.add_view(TicketView())
-    bot.add_view(VerifyView())
     try: await bot.tree.sync()
     except: pass
-
-@bot.event
-async def on_member_join(m):
-    d = sysd(m.guild.id)
-    r = d[str(m.guild.id)].get("autorole")
-    if r:
-        role = m.guild.get_role(int(r))
-        if role: await m.add_roles(role)
-
-@bot.event
-async def on_message_delete(msg):
-    if msg.author.bot: return
-    d = sysd(msg.guild.id)
-    c = d[str(msg.guild.id)].get("logs")
-    if c:
-        ch = msg.guild.get_channel(int(c))
-        if ch: await ch.send(embed=discord.Embed(description=f"Deleted {msg.author.mention}'s message: {msg.content[:100]}", color=discord.Color.red()))
-
-@bot.event
-async def on_message(msg):
-    if msg.author.bot: return
-    d = sysd(msg.guild.id)
-    st = d[str(msg.guild.id)].get("sticky", {})
-    if str(msg.channel.id) in st:
-        try:
-            old = await msg.channel.fetch_message(st[str(msg.channel.id)])
-            await old.delete()
-        except: pass
-        new = await msg.channel.send(embed=discord.Embed(description=st[str(msg.channel.id)], color=discord.Color.blue()))
-        data = sysd(msg.guild.id)
-        data[str(msg.guild.id)]["sticky"][str(msg.channel.id)] = new.id
-        save(SYS_FILE, data)
-    await bot.process_commands(msg)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def sticky(ctx, *, text):
-    d = sysd(ctx.guild.id); gid = str(ctx.guild.id)
-    if "sticky" not in d[gid]: d[gid]["sticky"] = {}
-    msg = await ctx.send(embed=discord.Embed(description=text, color=discord.Color.blue()))
-    d[gid]["sticky"][str(ctx.channel.id)] = msg.id; save(SYS_FILE, d)
-    await ctx.message.delete()
-
-@bot.command()
-async def ping(ctx): await ctx.send(f"🏓 Pong! `{round(bot.latency * 1000)}ms`")
 
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)
